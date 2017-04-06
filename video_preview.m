@@ -15,7 +15,6 @@ classdef video_preview < handle & matlab.mixin.CustomDisplay & dynamicprops
         SettingsFields
         SettingsConstraints
         SettingsDefaults
-        SettingsExist
         SettingsUI
     end
     
@@ -512,7 +511,7 @@ classdef video_preview < handle & matlab.mixin.CustomDisplay & dynamicprops
             if isempty(obj.Figure)
                 return
             end
-            for setting = obj.Settings(obj.SettingsExist)
+            for setting = obj.Settings
                 obj.SettingsUI.(setting{:}).Edit.String = ...
                     obj.(setting{:});
                 if regexpi(setting{:},'Exposure')
