@@ -1,4 +1,4 @@
-classdef video_preview < handle & matlab.mixin.CustomDisplay
+classdef video_preview < handle & matlab.mixin.CustomDisplay & dynamicprops
     
     properties (Access = private)
         hFigure = []
@@ -15,6 +15,7 @@ classdef video_preview < handle & matlab.mixin.CustomDisplay
         SettingsFields
         SettingsConstraints
         SettingsDefaults
+        SettingsExist
         SettingsUI
     end
     
@@ -26,9 +27,6 @@ classdef video_preview < handle & matlab.mixin.CustomDisplay
         VideoSource
         Figure
         ROISize
-        Exposure
-        Gain
-        Offset
         Visible
         Enable
         Preview
@@ -37,30 +35,57 @@ classdef video_preview < handle & matlab.mixin.CustomDisplay
     end
     
     properties
-        Dependent = false;
-        Scale = 1
+        Dependent
+        Scale
     end
     
     methods
         
         % Constructor
-        function obj = video_preview(vid,varargin)
-            obj.VideoInput  = vid;
-            if nargin >= 2
-                obj.Scale = varargin{1};
-            end
-            if nargin >= 3
-                obj.Dependent = varargin{2};
-            end
+        function obj = video_preview(varargin)
+
+            % parse input arguments
+            p = inputParser;
+            addRequired(p,'VideoInput',@(x) isa(x,'videoinput'));
+            addOptional(p,'Scale',false,@isnumeric);
+            addOptional(p,'Dependent',false,@islogical);
+            parse(p,varargin{:});
+
+            obj.VideoInput	= p.Results.VideoInput;
+            obj.Scale       = p.Results.Scale;
+            obj.Dependent   = p.Results.Dependent;
+
+            % all adjustable properties of the camera
+            prop_cam	= fieldnames(obj.VideoSource.propinfo);
+            prop_cam	= prop_cam(structfun(@(x) ...
+                strcmp(x.Constraint,'bounded'),obj.VideoSource.propinfo));
             
-            % get fieldnames and constraints for camera settings
-            tmp	= fieldnames(obj.VideoSource.propinfo);
-            tmp	= tmp(structfun(@(x) strcmp(x.Constraint,'bounded'),...
-                obj.VideoSource.propinfo));
+            % settings we would like to manipulate via sliders
             obj.Settings = {'Exposure','Gain','Offset'};
+            tmp          = cellfun(@(x) ...
+                any(cell2mat(regexpi(prop_cam,x))),obj.Settings);
+            obj.Settings = obj.Settings(tmp);
+            
+            
             for setting = obj.Settings
+                
+                % add a dynamic property to OBJ & assign GET/SET methods
+                h = obj.addprop(setting{:});
+                switch setting{:}
+                    case 'Exposure'
+                        h.SetMethod = @obj.set_Exposure;
+                        h.GetMethod = @obj.get_Exposure;
+                    case 'Gain'
+                        h.SetMethod = @obj.set_Gain;
+                        h.GetMethod = @obj.get_Gain;
+                    case 'Offset'
+                        h.SetMethod = @obj.set_Offset;
+                        h.GetMethod = @obj.get_Offset;
+                end
+                
+                % get fieldnames and constraints for camera settings
                 obj.SettingsFields.(setting{:}) = ...
-                    tmp(~cellfun(@isempty,regexpi(tmp,setting{:})));
+                    prop_cam(~cellfun(@isempty,regexpi(prop_cam,setting{:})));
                 obj.SettingsConstraints.(setting{:}) = ...
                     obj.VideoSource.propinfo ...
                     (obj.SettingsFields.(setting{:}){1}).ConstraintValue;
@@ -68,9 +93,9 @@ classdef video_preview < handle & matlab.mixin.CustomDisplay
                     obj.VideoSource.propinfo ...
                     (obj.SettingsFields.(setting{:}){1}).DefaultValue;
             end
-            
-            % work around an issue with the QiCam minimum gain setting
-            obj.SettingsConstraints.Gain(1) = .601;
+ 
+%             % work around an issue with the QiCam minimum gain setting
+%             obj.SettingsConstraints.Gain(1) = .601;
             
             % Initialize point coordinates
             obj.PointCoords.x = NaN;
@@ -167,51 +192,9 @@ classdef video_preview < handle & matlab.mixin.CustomDisplay
             end
         end
         
-        % Get/set Exposure
-        function out = get.Exposure(obj)
-            out = obj.VideoSource.(obj.SettingsFields.Exposure{1});
-        end
-        function set.Exposure(obj,value)
-            validateattributes(value,{'numeric'},{'scalar',...
-                '>=',obj.SettingsConstraints.Exposure(1),...
-                '<=',obj.SettingsConstraints.Exposure(2)})
-            
-            D       = 10^(3-ceil(log10(value)));    % round to three ...
-            value   = round(value*D)/D;             % significant digits
-            
-            for ii = 1:length(obj.SettingsFields.Exposure)
-                obj.VideoSource.(obj.SettingsFields.Exposure{ii}) = value;
-            end
-            obj.updateUI
-        end
-        
-        % Get/set Gain
-        function out = get.Gain(obj)
-            out = obj.VideoSource.(obj.SettingsFields.Gain{1});
-        end
-        function set.Gain(obj,value)
-            validateattributes(value,{'numeric'},{'scalar',...
-                '>=',obj.SettingsConstraints.Gain(1),...
-                '<=',obj.SettingsConstraints.Gain(2)})
-            
-            D       = 10^(3-ceil(log10(value)));    % round to three ...
-            value   = round(value*D)/D;             % significant digits
-            
-            obj.VideoSource.(obj.SettingsFields.Gain{1}) = value;
-            obj.updateUI
-        end
-        
-        % Get/set Offset
-        function out = get.Offset(obj)
-            out = obj.VideoSource.(obj.SettingsFields.Offset{1});
-        end
-        function set.Offset(obj,value)
-            validateattributes(value,{'numeric'},{'scalar',...
-                '>=',obj.SettingsConstraints.Offset(1),...
-                '<=',obj.SettingsConstraints.Offset(2)})
-            obj.VideoSource.(obj.SettingsFields.Offset{1}) = value;
-            obj.updateUI
-        end
+    end
+    
+    methods
         
         % Get/set status of preview
         function out = get.Preview(obj)
@@ -264,17 +247,64 @@ classdef video_preview < handle & matlab.mixin.CustomDisplay
                 'Resolution',   obj.Resolution, ...
                 'ROISize',      obj.ROISize, ...
                 'Scale',        obj.Scale);
-            propList3 = struct( ...
-                'Exposure',     obj.Exposure, ...
-                'Gain',         obj.Gain, ...
-                'Offset',       obj.Offset);
             propgrp(1) = matlab.mixin.util.PropertyGroup(propList1,'Figure Settings');
             propgrp(2) = matlab.mixin.util.PropertyGroup(propList2,'Image Dimensions');
-            propgrp(3) = matlab.mixin.util.PropertyGroup(propList3,'Image Control');
         end
     end
     
     methods (Access = private)
+        
+
+        % Get/set Exposure
+        function out = get_Exposure(obj,~)
+            out = obj.VideoSource.(obj.SettingsFields.Exposure{1});
+        end
+        function set_Exposure(obj,~,value)
+            validateattributes(value,{'numeric'},{'scalar',...
+                '>=',obj.SettingsConstraints.Exposure(1),...
+                '<=',obj.SettingsConstraints.Exposure(2)})
+            
+            D       = 10^(3-ceil(log10(value)));    % round to three ...
+            value   = round(value*D)/D;             % significant digits
+            
+            for ii = 1:length(obj.SettingsFields.Exposure)
+                obj.VideoSource.(obj.SettingsFields.Exposure{ii}) = value;
+            end
+            obj.updateUI
+        end
+        
+        % Get/set Gain
+        function out = get_Gain(obj,~)
+            out = obj.VideoSource.(obj.SettingsFields.Gain{1});
+        end
+        function set_Gain(obj,~,value)
+            validateattributes(value,{'numeric'},{'scalar',...
+                '>=',obj.SettingsConstraints.Gain(1),...
+                '<=',obj.SettingsConstraints.Gain(2)})
+            
+            D       = 10^(3-ceil(log10(value)));	% round to three ...
+            value   = round(value*D)/D;             % significant digits
+            
+            obj.VideoSource.(obj.SettingsFields.Gain{1}) = value;
+            obj.updateUI
+        end
+        
+        % Get/set Offset
+        function out = get_Offset(obj,~)
+            out = obj.VideoSource.(obj.SettingsFields.Offset{1});
+        end
+        function set_Offset(obj,~,value)
+            if isempty(obj.SettingsFields.Offset)
+                return
+            end
+            
+            validateattributes(value,{'numeric'},{'scalar',...
+                '>=',obj.SettingsConstraints.Offset(1),...
+                '<=',obj.SettingsConstraints.Offset(2)})
+            obj.VideoSource.(obj.SettingsFields.Offset{1}) = value;
+            obj.updateUI
+        end
+
         
         % Create GUI
         function createFigure(obj)
@@ -342,18 +372,23 @@ classdef video_preview < handle & matlab.mixin.CustomDisplay
             % Create UI controls for camera settings
             ButtonString = {'Auto Exposure','Reset Gain','Reset Offset'};
             for ii = 1:length(obj.Settings)
+                active = ~isempty(obj.SettingsFields.(obj.Settings{ii}));
+                enable = {'on' 'off'};
+                enable = enable{~active+1};
                 obj.SettingsUI.(obj.Settings{ii}).LabelName = uicontrol( ...
                     'Style',  	'text', ...
                     'String',	[obj.Settings{ii} ':'], ...
                     'Horiz',    'right', ...
-                    'Parent',   obj.Panels.Settings);
+                    'Parent',   obj.Panels.Settings,...
+                    'Enable',   enable);
                 obj.SettingsUI.(obj.Settings{ii}).Edit = uicontrol( ...
                     'Style',    'edit', ...
                     'Horiz',    'left', ...
                     'String',   obj.(obj.Settings{ii}), ...
                     'Parent',   obj.Panels.Settings, ...
                     'Tag',      obj.Settings{ii}, ...
-                    'Callback', {@obj.EditCallback});
+                    'Callback', {@obj.EditCallback},...
+                    'Enable',   enable);
                 obj.SettingsUI.(obj.Settings{ii}).Slider = uicontrol( ...
                     'Style',    'slider', ...
                     'Min',      obj.SettingsConstraints.(obj.Settings{ii})(1), ...
@@ -362,7 +397,8 @@ classdef video_preview < handle & matlab.mixin.CustomDisplay
                     'Backgr',   'white', ...
                     'Parent',   obj.Panels.Settings, ...
                     'Tag',      obj.Settings{ii}, ...
-                    'Callback', {@obj.SliderCallback});
+                    'Callback', {@obj.SliderCallback},...
+                    'Enable',   enable);
                 if regexpi(obj.Settings{ii},'Exposure')
                     set(obj.SettingsUI.(obj.Settings{ii}).Slider, ...
                         'Value',	log(obj.(obj.Settings{ii})), ...
@@ -385,7 +421,8 @@ classdef video_preview < handle & matlab.mixin.CustomDisplay
                     'String',   ButtonString{ii}, ...
                     'Parent',   obj.Panels.Settings, ...
                     'Tag',      obj.Settings{ii}, ...
-                    'Callback', {@obj.ButtonCallback});
+                    'Callback', {@obj.ButtonCallback},...
+                    'Enable',   enable);
             end
             
             obj.resizeFigure                        % position UI elements
@@ -475,7 +512,7 @@ classdef video_preview < handle & matlab.mixin.CustomDisplay
             if isempty(obj.Figure)
                 return
             end
-            for setting = obj.Settings
+            for setting = obj.Settings(obj.SettingsExist)
                 obj.SettingsUI.(setting{:}).Edit.String = ...
                     obj.(setting{:});
                 if regexpi(setting{:},'Exposure')
@@ -605,7 +642,7 @@ classdef video_preview < handle & matlab.mixin.CustomDisplay
                 obj.Fullscreen = false;
             else
                 screensize  = get(0,'screensize');
-                scale       = min((screensize(3:4)-150)./obj.ROISize);
+                scale       = min((screensize(3:4)-100)./obj.ROISize);
                 obj.FigurePosition = get(obj.Figure,'position');
                 set(obj.Figure, ...
                     'Position',     [0 0 round(obj.ROISize*scale)])
