@@ -195,6 +195,14 @@ classdef video_preview < handle & matlab.mixin.CustomDisplay & dynamicprops
     
     methods
         
+        function led(~,state)
+            d = daq.getDevices;
+            s = daq.createSession('ni');
+            s.addDigitalChannel(d(1).ID,'Port0/line7','OutputOnly');
+            outputSingleScan(s,state)
+            release(s)
+        end
+        
         % Get/set status of preview
         function out = get.Preview(obj)
             out = strcmp(obj.VideoInput.Previewing,'on');
@@ -202,10 +210,12 @@ classdef video_preview < handle & matlab.mixin.CustomDisplay & dynamicprops
         function set.Preview(obj,value)
             validateattributes(logical(value),{'logical'},{'scalar'})
             if value
+                obj.led(true)
                 preview(obj.VideoInput,obj.Image);
                 axis(obj.Axes.Image,'tight')
             else
                 stoppreview(obj.VideoInput)
+                obj.led(false)
             end
         end
         
@@ -351,7 +361,7 @@ classdef video_preview < handle & matlab.mixin.CustomDisplay & dynamicprops
                 'marker',           'o', ...
                 'markerfacecolor',  'r', ...
                 'markeredgecolor',  'w', ...
-                'markersize',       9, ...
+                'markersize',       5, ...
                 'linewidth',        1);
             
             % Create axes for live histogram
