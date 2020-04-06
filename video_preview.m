@@ -8,7 +8,6 @@ classdef video_preview < handle & matlab.mixin.CustomDisplay & dynamicprops
         Histogram
         Image
         PointCoords = [];
-        Fullscreen = false;
         PanelPosition
         FigurePosition
         Settings
@@ -42,7 +41,7 @@ classdef video_preview < handle & matlab.mixin.CustomDisplay & dynamicprops
         
         % Constructor
         function obj = video_preview(varargin)
-
+            
             % parse input arguments
             p = inputParser;
             addRequired(p,'VideoInput',@(x) isa(x,'videoinput'));
@@ -174,7 +173,6 @@ classdef video_preview < handle & matlab.mixin.CustomDisplay & dynamicprops
             else
                 obj.Figure.Visible  = 'off';
                 obj.Preview         = false;
-                obj.Fullscreen      = false;
             end
         end
         
@@ -194,15 +192,7 @@ classdef video_preview < handle & matlab.mixin.CustomDisplay & dynamicprops
     end
     
     methods
-        
-        function led(~,state)
-            d = daq.getDevices;
-            s = daq.createSession('ni');
-            s.addDigitalChannel(d(1).ID,'Port0/line7','OutputOnly');
-            outputSingleScan(s,state)
-            release(s)
-        end
-        
+       
         % Get/set status of preview
         function out = get.Preview(obj)
             out = strcmp(obj.VideoInput.Previewing,'on');
@@ -210,12 +200,10 @@ classdef video_preview < handle & matlab.mixin.CustomDisplay & dynamicprops
         function set.Preview(obj,value)
             validateattributes(logical(value),{'logical'},{'scalar'})
             if value
-                obj.led(true)
                 preview(obj.VideoInput,obj.Image);
                 axis(obj.Axes.Image,'tight')
             else
                 stoppreview(obj.VideoInput)
-                obj.led(false)
             end
         end
         
@@ -273,8 +261,9 @@ classdef video_preview < handle & matlab.mixin.CustomDisplay & dynamicprops
                 '>=',obj.SettingsConstraints.Exposure(1),...
                 '<=',obj.SettingsConstraints.Exposure(2)})
             
-            D       = 10^(3-ceil(log10(value)));    % round to three ...
-            value   = round(value*D)/D;             % significant digits
+            value   = double(value);
+            D       = 10^(3-ceil(log10(abs(value))));  % round to three ...
+            value	= round(value*D)/D;                % significant digits
             
             for ii = 1:length(obj.SettingsFields.Exposure)
                 obj.VideoSource.(obj.SettingsFields.Exposure{ii}) = value;
@@ -291,9 +280,10 @@ classdef video_preview < handle & matlab.mixin.CustomDisplay & dynamicprops
                 '>=',obj.SettingsConstraints.Gain(1),...
                 '<=',obj.SettingsConstraints.Gain(2)})
             
-            D       = 10^(3-ceil(log10(value)));	% round to three ...
-            value   = round(value*D)/D;             % significant digits
-            
+            value   = double(value);
+            D       = 10^(3-ceil(log10(abs(value))));  % round to three ...
+            value   = round(value*D)/D;                % significant digits
+                
             obj.VideoSource.(obj.SettingsFields.Gain{1}) = value;
             obj.updateUI
         end
@@ -409,10 +399,17 @@ classdef video_preview < handle & matlab.mixin.CustomDisplay & dynamicprops
                     'Callback', {@obj.SliderCallback},...
                     'Enable',   enable);
                 if regexpi(obj.Settings{ii},'Exposure')
-                    set(obj.SettingsUI.(obj.Settings{ii}).Slider, ...
-                        'Value',	log(obj.(obj.Settings{ii})), ...
-                        'Min',      log(obj.SettingsConstraints.(obj.Settings{ii})(1)), ...
-                        'Max',      log(obj.SettingsConstraints.(obj.Settings{ii})(2)));
+                    if obj.SettingsConstraints.(obj.Settings{ii})(2) < 0
+                        set(obj.SettingsUI.(obj.Settings{ii}).Slider, ...
+                            'Value',	obj.(obj.Settings{ii}), ...
+                            'Min',      obj.SettingsConstraints.(obj.Settings{ii})(1), ...
+                            'Max',      obj.SettingsConstraints.(obj.Settings{ii})(2));                        
+                    else
+                        set(obj.SettingsUI.(obj.Settings{ii}).Slider, ...
+                            'Value',	log(obj.(obj.Settings{ii})), ...
+                            'Min',      log(obj.SettingsConstraints.(obj.Settings{ii})(1)), ...
+                            'Max',      log(obj.SettingsConstraints.(obj.Settings{ii})(2)));
+                    end
                 end
                 obj.SettingsUI.(obj.Settings{ii}).LabelMin = uicontrol( ...
                     'Style',    'text', ...
@@ -448,7 +445,7 @@ classdef video_preview < handle & matlab.mixin.CustomDisplay & dynamicprops
             obj.Histogram.Data = event.Data;     	% replace hist data
             set(obj.Axes.Histogram,'ylim',...      	% set Y limits
                 [0 1.05*max(obj.Histogram.Values)])
-            drawnow                                 % refresh display
+            drawnow nocallbacks                  	% refresh display
         end 
         
         % Resize the main figure and its UI elements
@@ -524,7 +521,8 @@ classdef video_preview < handle & matlab.mixin.CustomDisplay & dynamicprops
             for setting = obj.Settings
                 obj.SettingsUI.(setting{:}).Edit.String = ...
                     obj.(setting{:});
-                if regexpi(setting{:},'Exposure')
+                if regexpi(setting{:},'Exposure') && ...
+                        obj.SettingsUI.(setting{:}).Slider.Value > 0
                     obj.SettingsUI.(setting{:}).Slider.Value = ...
                         log(obj.(setting{:}));
                 else
@@ -549,7 +547,7 @@ classdef video_preview < handle & matlab.mixin.CustomDisplay & dynamicprops
         
         % Callback function for sliders
         function SliderCallback(obj,source,~)
-            if regexpi(source.Tag,'Exposure')
+            if regexpi(source.Tag,'Exposure') && source.Value > 0
                 new_val = exp(source.Value);
             else
                 new_val = source.Value;
@@ -635,36 +633,35 @@ classdef video_preview < handle & matlab.mixin.CustomDisplay & dynamicprops
         
         % Toggle fullscreen mode of preview image
         function toggleFullscreen(obj,~,~,~)
-            if isempty(obj.Figure)
+            % fullscreen is only supported from version 2018a
+            if isempty(obj.Figure) || verLessThan('matlab','9.4')
                 return
             end
             
-            obj.Figure.Visible = 'off';
-            if obj.Fullscreen
-                set(obj.Figure,'position',obj.FigurePosition)
-                set(obj.Panels.Image,...
-                    'Units',     	'pixels', ...
-                    'Position',     obj.PanelPosition.Image, ...
-                    'BorderType', 	'beveledin')
-                set([obj.Panels.Histogram obj.Panels.Settings], ...
-                    'Visible',      'on')
-                obj.Fullscreen = false;
-            else
-                screensize  = get(0,'screensize');
-                scale       = min((screensize(3:4)-100)./obj.ROISize);
-                obj.FigurePosition = get(obj.Figure,'position');
-                set(obj.Figure, ...
-                    'Position',     [0 0 round(obj.ROISize*scale)])
-                set(obj.Panels.Image,...
-                    'Units',        'Normalized', ...
-                    'Position',     [0 0 1 1], ...
-                    'BorderType', 	'line')
-                set([obj.Panels.Histogram obj.Panels.Settings], ...
-                    'Visible',      'off')
-                movegui(obj.Figure,'center')
-                obj.Fullscreen = true;
-            end
-            obj.Figure.Visible = 'on';
+            % depopulate figure & maximize
+            set(obj.Panels.Image,...
+                'Units',        'Normalized', ...
+                'Position',     [0 0 1 1], ...
+                'BorderType', 	'none')
+            set([obj.Panels.Histogram obj.Panels.Settings], ...
+                'Visible',      'off')
+            set(obj.Figure,...
+                'WindowStyle',  'modal', ...
+                'WindowState',  'fullscreen')
+            
+            % wait for user interaction
+            waitforbuttonpress
+            
+            % repopulate figure & return to normal state
+            set(obj.Panels.Image,...
+                'Units',     	'pixels', ...
+                'Position',     obj.PanelPosition.Image, ...
+                'BorderType', 	'beveledin')
+            set([obj.Panels.Histogram obj.Panels.Settings], ...
+                'Visible',      'on')
+            set(obj.Figure,...
+                'WindowStyle',  'normal', ...
+                'WindowState',  'normal')
         end
         
         % Close the app
